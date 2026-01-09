@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SprayWall App - Clean</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Oswald:wght@500;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #e2e8f0; }
+        h1, h2, .font-display { font-family: 'Oswald', sans-serif; letter-spacing: 0.05em; }
+        body { overscroll-behavior-y: none; touch-action: none; overflow: hidden; }
+        .no-select { user-select: none; -webkit-user-select: none; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 10px; }
+        .bg-stone-texture {
+            background-color: #0f172a;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
+        }
+        @keyframes pop { 0% { transform: scale(0.8); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
+        .hold-animate { animation: pop 0.15s ease-out forwards; }
+        .fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .app-layout { display: flex; flex-direction: column; height: 100dvh; }
+        .app-content { flex: 1; overflow-y: auto; overflow-x: hidden; position: relative; }
+        .bottom-nav { height: 5rem; flex-shrink: 0; transition: height 0.3s ease; }
+    </style>
+</head>
+<body class="bg-stone-texture">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- CONSTANTES ---
+        const APP_STORAGE_KEY = 'spraywall_v19_clean';
+
+        const HOLD_TYPES = {
+            START_FOOT: { id: 'start_foot', color: 'border-blue-500',   label: 'P' },
+            START_HAND: { id: 'start_hand', color: 'border-emerald-500',label: 'M' },
+            NORMAL:     { id: 'normal',     color: 'border-yellow-400', label: 'R' },
+            TOP:        { id: 'top',        color: 'border-rose-600',   label: 'T' },
+            ERASER:     { id: 'eraser',     color: 'border-gray-400',   label: 'X' }
+        };
+
+        const GRADING_SYSTEMS = {
+            'v_scale': { label: 'Boulder (V-Scale)', grades: ['VB', 'V0', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11', 'V12+'] },
+            'font_scale': { label: 'Boulder (Font)', grades: ['4', '5', '6A', '6A+', '6B', '6B+', '6C', '6C+', '7A', '7A+', '7B', '7C', '8A', '8B+'] },
+            'french_sport': { label: 'Deportiva', grades: ['4', '5a', '6a', '6a+', '6b', '6c', '7a', '7a+', '7b', '7c', '8a', '9a'] }
+        };
+
+        const AVAILABLE_TAGS = ['Regleta', 'Romo', 'Pinza', 'Dinámico', 'Equilibrio', 'Físico', 'Técnico', 'Resistencia', 'Placa', 'Desplome'];
+
+        // --- IMÁGENES ACTUALIZADAS ---
+        const DEFAULT_WALLS = [
+            { id: 'w1', name: "MURO COMPETICIÓN", image: "https://images.unsplash.com/photo-1522163182402-834f871fd851?auto=format&fit=crop&w=800&q=80", type: 'example' },
+            // Eliminada la imagen conflictiva (w2)
+            { id: 'w3', name: "HOME BOARD", image: "https://images.unsplash.com/photo-1564769662533-4f00a87b4056?auto=format&fit=crop&w=800&q=80", type: 'example' }
+        ];
+
+        // --- UTILS ---
+        const compressImage = (file) => {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 1000; 
+                        const scaleSize = MAX_WIDTH / img.width;
+                        canvas.width = MAX_WIDTH;
+                        canvas.height = img.height * scaleSize;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        resolve(canvas.toDataURL('image/jpeg', 0.8));
+                    }
+                }
+            })
+        };
+
+        const Icon = ({ name, size = 20, className = "" }) => {
+            const icons = {
+                home: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>,
+                route: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"></circle><path d="M8 12l2 2 4-4"></path></svg>,
+                stats: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20v-6"></path></svg>,
+                arrowLeft: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>,
+                trash: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2 2v2"></path></svg>,
+                plus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>,
+                minus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="5" y1="12" x2="19" y2="12"></line></svg>,
+                camera: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>,
+                pencil: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>,
+                x: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>,
+                search: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>,
+                copy: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>,
+                check: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="20 6 9 17 4 12"></polyline></svg>,
+                settings: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>,
+                download: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>,
+                upload: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            };
+            return icons[name] || null;
+        };
+
+        const SafeImage = ({ src, alt, className, ...props }) => {
+            const [error, setError] = useState(false);
+            if (error) return <div className={`bg-slate-800 flex items-center justify-center ${className}`} {...props}><span className="text-4xl">🧗</span></div>;
+            return <img src={src} alt={alt} className={className} onError={() => setError(true)} {...props} />;
+        };
+
+        const ZoomPanWrapper = ({ children, onContentClick, className }) => {
+            const [scale, setScale] = useState(1);
+            const [position, setPosition] = useState({ x: 0, y: 0 });
+            const [isDragging, setIsDragging] = useState(false);
+            const dragStart = useRef({ x: 0, y: 0 });
+            const isClick = useRef(true);
+
+            const handlePointerDown = (e) => {
+                setIsDragging(true);
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                dragStart.current = { x: clientX, y: clientY };
+                isClick.current = true;
+            };
+
+            const handlePointerMove = (e) => {
+                if (!isDragging) return;
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const dx = clientX - dragStart.current.x;
+                const dy = clientY - dragStart.current.y;
+                if (Math.abs(dx) > 5 || Math.abs(dy) > 5) isClick.current = false;
+                if (scale > 1) setPosition(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+                dragStart.current = { x: clientX, y: clientY };
+            };
+
+            const handlePointerUp = (e) => {
+                setIsDragging(false);
+                if (isClick.current && onContentClick) onContentClick(e);
+            };
+
+            const zoomIn = () => setScale(p => Math.min(p + 0.5, 4));
+            const zoomOut = () => setScale(p => { const n = Math.max(p - 0.5, 1); if(n===1) setPosition({x:0, y:0}); return n; });
+            const resetZoom = () => { setScale(1); setPosition({x:0, y:0}); };
+
+            return (
+                <div className={`relative overflow-hidden w-full h-full bg-stone-900 ${className}`}
+                    onTouchStart={handlePointerDown} onTouchMove={handlePointerMove} onTouchEnd={handlePointerUp}
+                    onMouseDown={handlePointerDown} onMouseMove={handlePointerMove} onMouseUp={handlePointerUp}>
+                    <div style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`, transformOrigin: 'center center', transition: isDragging ? 'none' : 'transform 0.2s ease-out' }}
+                        className="w-full h-full flex items-center justify-center cursor-crosshair">
+                        {children}
+                    </div>
+                    <div className="absolute bottom-6 right-4 flex flex-col gap-3 z-30 pointer-events-auto">
+                        {scale > 1 && <button onClick={resetZoom} className="bg-blue-600/90 p-2 rounded-full text-white shadow-lg animate-fade-in text-[10px] font-bold w-10 h-10 flex items-center justify-center border border-white/20">1x</button>}
+                        <button onClick={zoomIn} className="bg-black/60 backdrop-blur p-2 rounded-full text-white border border-white/20 shadow-lg w-10 h-10 flex items-center justify-center active:bg-black"><Icon name="plus" /></button>
+                        <button onClick={zoomOut} className="bg-black/60 backdrop-blur p-2 rounded-full text-white border border-white/20 shadow-lg w-10 h-10 flex items-center justify-center active:bg-black"><Icon name="minus" /></button>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- COMPONENTES ---
+
+        const BottomNav = ({ activeTab, onTabChange }) => (
+            <div className="bottom-nav bg-[#0f172a]/95 backdrop-blur border-t border-slate-700 flex justify-around items-center shadow-[0_-5px_20px_rgba(0,0,0,0.3)] z-50">
+                <button onClick={() => onTabChange('home')} className={`flex flex-col items-center gap-1 px-4 py-2 ${activeTab === 'home' ? 'text-blue-400' : 'text-slate-500'}`}>
+                    <Icon name="home" size={24} /><span className="text-[10px] font-bold uppercase tracking-wider">Inicio</span>
+                </button>
+                <button onClick={() => onTabChange('routes')} className={`flex flex-col items-center gap-1 px-4 py-2 ${activeTab === 'routes' ? 'text-blue-400' : 'text-slate-500'}`}>
+                    <Icon name="route" size={24} /><span className="text-[10px] font-bold uppercase tracking-wider">Rutas</span>
+                </button>
+                <button onClick={() => onTabChange('stats')} className={`flex flex-col items-center gap-1 px-4 py-2 ${activeTab === 'stats' ? 'text-blue-400' : 'text-slate-500'}`}>
+                    <Icon name="stats" size={24} /><span className="text-[10px] font-bold uppercase tracking-wider">Stats</span>
+                </button>
+            </div>
+        );
+
+        const RouteViewer = ({ wall, route, onBack, onEdit, onUpdateStatus, onFork, onDelete }) => {
+            const isSent = route.status === 'sent';
+            
+            return (
+                <div className="absolute inset-0 flex flex-col z-40 bg-[#0f172a] animate-fade-in">
+                    <div className="absolute top-0 left-0 right-0 p-4 pt-4 flex justify-between items-center z-40 pointer-events-none">
+                        <button onClick={onBack} className="bg-black/50 backdrop-blur border border-white/10 rounded-full p-2 text-white pointer-events-auto hover:bg-black/70 active:scale-95"><Icon name="arrowLeft" /></button>
+                        <div className="flex gap-2 pointer-events-auto">
+                            <button onClick={onFork} className="bg-slate-700/80 backdrop-blur rounded-full p-3 text-white shadow-lg active:scale-95"><Icon name="copy" size={20} /></button>
+                            <button onClick={onEdit} className="bg-blue-600 rounded-full p-3 text-white shadow-lg active:bg-blue-700"><Icon name="pencil" size={20} /></button>
+                            <button onClick={() => { if(confirm('¿Borrar ruta?')) onDelete(route.id); }} className="bg-red-600/80 rounded-full p-3 text-white shadow-lg active:bg-red-700"><Icon name="trash" size={20} /></button>
+                        </div>
+                    </div>
+                    <ZoomPanWrapper className="flex-1">
+                        <div className="relative w-full max-w-4xl shadow-2xl">
+                            <SafeImage src={wall.image} className="w-full h-auto object-contain select-none pointer-events-none" />
+                            {route.holds.map(h => (
+                                <div key={h.id} className={`absolute w-6 h-6 md:w-8 md:h-8 -ml-3 -mt-3 rounded-full border-[3px] ${HOLD_TYPES[h.type.toUpperCase()].color} bg-transparent z-20 shadow-sm backdrop-blur-[1px] pointer-events-none`} style={{ left: `${h.x}%`, top: `${h.y}%` }}></div>
+                            ))}
+                        </div>
+                    </ZoomPanWrapper>
+                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black via-black/90 to-transparent pt-12 pb-4 px-6 z-30 pointer-events-auto">
+                        <div className="flex justify-between items-end mb-3">
+                            <div>
+                                <h2 className="text-2xl font-display font-bold text-white uppercase italic text-shadow leading-tight">{route.title}</h2>
+                                <p className="text-xs text-slate-300 flex items-center gap-2 mb-1"><span className="bg-slate-800 px-2 py-0.5 rounded text-[10px] border border-slate-700">{GRADING_SYSTEMS[route.gradingSystem]?.label || 'Boulder'}</span></p>
+                                {route.tags && route.tags.length > 0 && (
+                                    <div className="flex gap-1 flex-wrap mt-1">
+                                        {route.tags.map(tag => (
+                                            <span key={tag} className="text-[10px] bg-blue-900/50 text-blue-200 px-2 py-0.5 rounded border border-blue-500/30">{tag}</span>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="text-3xl font-display font-bold text-blue-500 text-shadow">{route.grade}</div>
+                        </div>
+                        <button onClick={() => onUpdateStatus(isSent ? 'project' : 'sent')} className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${isSent ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}>
+                            <Icon name="check" size={18} /> {isSent ? 'ENCADENADO' : 'MARCAR COMO HECHO'}
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        const RouteEditor = ({ wall, initialData, onSave, onCancel }) => {
+            const [holds, setHolds] = useState(initialData?.holds || []);
+            const [selectedTool, setSelectedTool] = useState('normal'); 
+            const [metadata, setMetadata] = useState({ 
+                title: initialData?.title || '', 
+                gradingSystem: initialData?.gradingSystem || 'v_scale', 
+                grade: initialData?.grade || 'V3', 
+                description: initialData?.description || '',
+                status: initialData?.status || 'project',
+                tags: initialData?.tags || []
+            });
+            const [isSaving, setIsSaving] = useState(false);
+            const imgRef = useRef(null);
+
+            const handleSystemChange = (e) => setMetadata({ ...metadata, gradingSystem: e.target.value, grade: GRADING_SYSTEMS[e.target.value].grades[0] });
+            const handleContentClick = (e) => {
+                if (selectedTool === 'eraser' || !imgRef.current) return;
+                const rect = imgRef.current.getBoundingClientRect();
+                const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+                const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+                const x = ((clientX - rect.left) / rect.width) * 100;
+                const y = ((clientY - rect.top) / rect.height) * 100;
+                if (x >= 0 && x <= 100 && y >= 0 && y <= 100) setHolds([...holds, { id: Date.now(), x, y, type: selectedTool }]);
+            };
+            const handleHoldClick = (e, holdId) => {
+                e.stopPropagation(); 
+                if (selectedTool === 'eraser') setHolds(holds.filter(h => h.id !== holdId));
+                else setHolds(holds.map(h => h.id === holdId ? { ...h, type: selectedTool } : h));
+            };
+            const toggleTag = (tag) => {
+                setMetadata(prev => {
+                    const newTags = prev.tags.includes(tag) 
+                        ? prev.tags.filter(t => t !== tag)
+                        : [...prev.tags, tag];
+                    return { ...prev, tags: newTags };
+                });
+            };
+
+            return (
+                <div className="absolute inset-0 flex flex-col z-40 bg-[#0f172a] animate-fade-in">
+                    <div className="absolute top-0 left-0 right-0 p-4 pt-4 flex justify-between items-center z-40 bg-gradient-to-b from-black/90 to-transparent pointer-events-none">
+                        <button onClick={onCancel} className="bg-slate-800/80 backdrop-blur border border-slate-600 rounded-full px-4 py-2 text-white text-xs font-bold pointer-events-auto active:bg-slate-700">CANCELAR</button>
+                        <div className="bg-blue-600/20 backdrop-blur px-3 py-1 rounded-full border border-blue-500/30"><span className="text-xs font-bold text-blue-300 uppercase tracking-widest">EDICIÓN</span></div>
+                        <button onClick={() => holds.length > 0 ? setIsSaving(true) : alert('Marca agarres primero')} className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-full text-xs font-bold shadow-lg shadow-blue-900/30 transition-transform active:scale-95 pointer-events-auto">GUARDAR</button>
+                    </div>
+                    <ZoomPanWrapper className="flex-1" onContentClick={handleContentClick}>
+                        <div className="relative w-full max-w-4xl shadow-2xl">
+                            <img ref={imgRef} src={wall.image} className="w-full h-auto object-contain select-none pointer-events-none" onError={(e) => e.target.style.display = 'none'} />
+                            <div className="absolute inset-0 flex items-center justify-center -z-10 bg-slate-800"><span className="text-slate-600 font-bold">CARGANDO...</span></div>
+                            {holds.map(h => (
+                                <div key={h.id} onPointerUp={(e) => handleHoldClick(e, h.id)} className={`absolute w-6 h-6 md:w-8 md:h-8 -ml-3 -mt-3 rounded-full border-[3px] ${HOLD_TYPES[h.type.toUpperCase()].color} bg-transparent cursor-pointer z-20 shadow-sm backdrop-blur-[1px] pointer-events-auto`} style={{ left: `${h.x}%`, top: `${h.y}%` }}></div>
+                            ))}
+                        </div>
+                    </ZoomPanWrapper>
+                    <div className="absolute bottom-6 left-4 flex flex-col gap-3 z-40 pointer-events-auto">
+                        {[HOLD_TYPES.START_FOOT, HOLD_TYPES.START_HAND, HOLD_TYPES.NORMAL, HOLD_TYPES.TOP].map(type => (
+                            <button key={type.id} onClick={() => setSelectedTool(type.id)} className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow-lg active:scale-90 ${selectedTool === type.id ? 'bg-white ring-2 ring-blue-500 scale-110' : 'bg-black/60 backdrop-blur border border-white/20'}`}>
+                                <div className={`w-5 h-5 rounded-full border-2 ${type.color} bg-transparent`}></div>
+                            </button>
+                        ))}
+                        <div className="h-2"></div>
+                        <button onClick={() => setSelectedTool('eraser')} className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shadow-lg active:scale-90 ${selectedTool === 'eraser' ? 'bg-red-500 text-white scale-110' : 'bg-black/60 backdrop-blur border border-white/20 text-gray-300'}`}><Icon name="trash" size={20} /></button>
+                    </div>
+                    {isSaving && (
+                        <div className="fixed inset-0 z-[100] bg-[#0f172a] flex flex-col animate-fade-in">
+                            <div className="p-4 flex items-center justify-between border-b border-slate-800 bg-slate-900/50 backdrop-blur">
+                                <h3 className="text-lg font-display font-bold text-white uppercase">Guardar Ruta</h3>
+                                <button onClick={() => setIsSaving(false)} className="p-2 text-slate-400 hover:text-white"><Icon name="x" size={24} /></button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-6 pb-safe">
+                                <div className="space-y-6 max-w-md mx-auto">
+                                    <div><label className="text-xs text-slate-400 font-bold uppercase mb-2 block">Nombre</label><input autoFocus type="text" className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-white text-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all" value={metadata.title} onChange={e => setMetadata({...metadata, title: e.target.value})} placeholder="Ej. Crimpy Business" /></div>
+                                    <div className="grid grid-cols-1 gap-6">
+                                        <div><label className="text-xs text-slate-400 font-bold uppercase mb-2 block">Sistema</label><select className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-white outline-none" value={metadata.gradingSystem} onChange={handleSystemChange}>{Object.entries(GRADING_SYSTEMS).map(([key, system]) => <option key={key} value={key}>{system.label}</option>)}</select></div>
+                                        <div><label className="text-xs text-slate-400 font-bold uppercase mb-2 block">Grado</label><select className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-white outline-none text-lg font-bold" value={metadata.grade} onChange={e => setMetadata({...metadata, grade: e.target.value})}>{GRADING_SYSTEMS[metadata.gradingSystem].grades.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-slate-400 font-bold uppercase mb-2 block">Etiquetas (Estilo)</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {AVAILABLE_TAGS.map(tag => (
+                                                <button key={tag} onClick={() => toggleTag(tag)} className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors border ${metadata.tags.includes(tag) ? 'bg-blue-600 text-white border-blue-500' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500'}`}>{tag}</button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div><label className="text-xs text-slate-400 font-bold uppercase mb-2 block">Descripción</label><textarea rows="4" className="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-white text-sm focus:border-blue-500 outline-none" value={metadata.description} onChange={e => setMetadata({...metadata, description: e.target.value})} placeholder="Crux, movimientos clave, etc..."></textarea></div>
+                                    <button onClick={() => onSave({ ...metadata, holds })} className="w-full py-4 bg-blue-600 rounded-xl font-bold text-white shadow-lg hover:bg-blue-500 active:scale-[0.98] transition-all uppercase tracking-wide text-sm mt-4">Confirmar y Guardar</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const StatsView = ({ routes }) => {
+            const total = routes.length;
+            const sent = routes.filter(r => r.status === 'sent').length;
+            return (
+                <div className="p-6 pt-12 pb-32 animate-fade-in">
+                    <header className="mb-10"><h1 className="text-4xl font-display font-bold text-white mb-1 uppercase italic">Tu Progreso</h1></header>
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div className="bg-slate-800/40 border border-slate-700 p-5 rounded-2xl"><div className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mb-1">Rutas Creadas</div><div className="text-4xl font-display font-bold text-white">{total}</div></div>
+                        <div className="bg-green-900/20 border border-green-800/50 p-5 rounded-2xl"><div className="text-green-500 text-[10px] font-bold uppercase tracking-widest mb-1">Encadenadas</div><div className="text-4xl font-display font-bold text-green-400">{sent}</div></div>
+                    </div>
+                </div>
+            );
+        };
+
+        const HomeView = ({ walls, onSelectWall, onUploadWall, onImport, onExport }) => {
+            const fileInputRef = useRef(null);
+            const importInputRef = useRef(null);
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [showSettings, setShowSettings] = useState(false);
+            const handleFileChange = async (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    setIsProcessing(true);
+                    try {
+                        const compressedBase64 = await compressImage(file);
+                        onUploadWall({ name: `MURO PERS. #${walls.length + 1}`, image: compressedBase64, type: 'user' });
+                    } catch (error) { alert("Error procesando imagen"); }
+                    setIsProcessing(false);
+                }
+            };
+            const handleImportFile = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const json = JSON.parse(ev.target.result);
+                        onImport(json);
+                        setShowSettings(false);
+                        alert("Datos importados correctamente");
+                    } catch (err) { alert("Archivo inválido"); }
+                };
+                reader.readAsText(file);
+            };
+            return (
+                <div className="pb-28 animate-fade-in">
+                    <div className="relative h-64 bg-slate-900 overflow-hidden flex items-end border-b border-slate-800 shrink-0">
+                        <div className="absolute inset-0 opacity-40 mix-blend-overlay" style={{backgroundImage: 'url(https://images.unsplash.com/photo-1597585090176-4c9f7d23f79e?q=80&w=1000&auto=format&fit=crop)', backgroundSize: 'cover', backgroundPosition: 'center'}}></div>
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#0f172a] via-[#0f172a]/80 to-transparent"></div>
+                        <div className="absolute top-4 right-4 z-20"><button onClick={() => setShowSettings(true)} className="p-2 bg-slate-800/50 backdrop-blur rounded-full text-white hover:bg-slate-700"><Icon name="settings" size={20} /></button></div>
+                        <div className="relative z-10 p-6 w-full"><h1 className="text-4xl md:text-5xl font-display font-bold text-white italic leading-none mb-2 text-shadow">SPRAY<br/><span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">WALL APP</span></h1></div>
+                    </div>
+                    <div className="p-6">
+                        <div className="grid gap-8">
+                            {walls.map(wall => (
+                                <div key={wall.id} onClick={() => onSelectWall(wall)} className="group relative aspect-video rounded-xl overflow-hidden cursor-pointer shadow-2xl border border-slate-700/50 transform transition-all hover:scale-[1.02] active:scale-95">
+                                    <SafeImage src={wall.image} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-all duration-500 grayscale group-hover:grayscale-0" />
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-90"></div>
+                                    <div className="absolute bottom-4 left-4 border-l-4 border-blue-500 pl-3"><h3 className="font-display font-bold text-white text-xl tracking-wide">{wall.name}</h3></div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="fixed bottom-24 right-6 z-30 pointer-events-auto">
+                        <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+                        <button onClick={() => fileInputRef.current.click()} className="w-14 h-14 bg-blue-600 rounded-full flex items-center justify-center text-white shadow-[0_4px_20px_rgba(37,99,235,0.5)] hover:bg-blue-500 hover:scale-110 transition-all border border-blue-400/50">{isProcessing ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Icon name="camera" size={24} />}</button>
+                    </div>
+                    {showSettings && (
+                        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6">
+                            <div className="bg-slate-800 w-full max-w-sm rounded-2xl p-6 border border-slate-700">
+                                <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold text-white">Configuración</h3><button onClick={() => setShowSettings(false)} className="text-slate-400"><Icon name="x" /></button></div>
+                                <div className="space-y-3">
+                                    <button onClick={onExport} className="w-full py-4 bg-slate-700 rounded-xl flex items-center justify-center gap-3 text-white font-bold hover:bg-slate-600"><Icon name="download" /> Exportar Copia de Seguridad</button>
+                                    <input type="file" ref={importInputRef} className="hidden" accept=".json" onChange={handleImportFile} />
+                                    <button onClick={() => importInputRef.current.click()} className="w-full py-4 bg-slate-700 rounded-xl flex items-center justify-center gap-3 text-white font-bold hover:bg-slate-600"><Icon name="upload" /> Importar Datos</button>
+                                </div>
+                                <p className="text-xs text-center text-slate-500 mt-6">v19.0 - Stable</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const RoutesListView = ({ routes, onSelectRoute }) => {
+            const [filter, setFilter] = useState('');
+            const filteredRoutes = routes.filter(r => r.title.toLowerCase().includes(filter.toLowerCase()) || r.grade.toLowerCase().includes(filter.toLowerCase()));
+            return (
+                <div className="p-6 pt-8 pb-32 animate-fade-in flex flex-col h-full">
+                    <div className="mb-4 sticky top-0 z-10 bg-[#0f172a]/95 pb-2 backdrop-blur">
+                        <div className="relative"><Icon name="search" className="absolute left-3 top-3 text-slate-500" size={18} /><input type="text" placeholder="Buscar ruta o grado..." className="w-full bg-slate-800 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-white outline-none focus:border-blue-500" value={filter} onChange={e => setFilter(e.target.value)} /></div>
+                    </div>
+                    {filteredRoutes.length === 0 ? <div className="text-center py-20 opacity-50"><p className="text-slate-500">No se encontraron rutas.</p></div> : 
+                    <div className="space-y-3 mt-2 overflow-y-auto">
+                        {filteredRoutes.map(route => (
+                            <div key={route.id} onClick={() => onSelectRoute(route)} className="bg-slate-800/60 p-4 rounded-xl border border-slate-700/50 flex justify-between items-center cursor-pointer hover:bg-slate-700 transition-colors backdrop-blur-sm group">
+                                <div className="flex items-center gap-4"><div className={`w-10 h-10 rounded flex items-center justify-center font-display font-bold text-lg border ${route.grade.includes('V8') ? 'text-rose-500 border-rose-500/30 bg-rose-500/10' : 'text-blue-400 border-blue-500/30 bg-blue-500/10'}`}>{route.grade}</div><div><h3 className="font-bold text-gray-200 group-hover:text-white transition-colors flex items-center gap-2">{route.title} {route.status === 'sent' && <Icon name="check" size={14} className="text-green-500" />}</h3><span className="text-[10px] text-slate-500 uppercase tracking-wider bg-slate-900 px-1.5 py-0.5 rounded">{GRADING_SYSTEMS[route.gradingSystem]?.label.split('(')[0]}</span></div></div><Icon name="route" size={18} className="text-slate-600 group-hover:text-blue-400 transition-colors" />
+                            </div>
+                        ))}
+                    </div>}
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [walls, setWalls] = useState(() => { const saved = localStorage.getItem(APP_STORAGE_KEY); return saved ? JSON.parse(saved).walls : DEFAULT_WALLS; });
+            const [routes, setRoutes] = useState(() => { const saved = localStorage.getItem(APP_STORAGE_KEY); return saved ? JSON.parse(saved).routes : []; });
+            const [activeTab, setActiveTab] = useState('home');
+            const [activeWallId, setActiveWallId] = useState(null);
+            const [selectedRoute, setSelectedRoute] = useState(null); 
+            const [viewMode, setViewMode] = useState('none'); 
+
+            useEffect(() => { try { localStorage.setItem(APP_STORAGE_KEY, JSON.stringify({ walls, routes })); } catch (e) { alert("Almacenamiento lleno."); } }, [walls, routes]);
+
+            const activeWall = useMemo(() => walls.find(w => w.id === activeWallId), [walls, activeWallId]);
+            const wallRoutes = useMemo(() => activeWallId ? routes.filter(r => r.wallId === activeWallId) : [], [routes, activeWallId]);
+
+            const handleUploadWall = (newWallData) => setWalls(prev => [{ ...newWallData, id: `u_${Date.now()}` }, ...prev]);
+            const handleSaveRoute = (data) => {
+                const newRoute = { ...data, id: selectedRoute ? selectedRoute.id : Date.now(), wallId: activeWallId || selectedRoute.wallId, lastModified: Date.now() };
+                setRoutes(prev => selectedRoute ? prev.map(r => r.id === newRoute.id ? newRoute : r) : [newRoute, ...prev]);
+                setSelectedRoute(newRoute); setViewMode('viewer');
+            };
+            const handleUpdateStatus = (status) => {
+                if (!selectedRoute) return;
+                const updatedRoute = { ...selectedRoute, status };
+                setRoutes(prev => prev.map(r => r.id === selectedRoute.id ? updatedRoute : r));
+                setSelectedRoute(updatedRoute);
+            };
+            const handleForkRoute = () => {
+                if (!selectedRoute) return;
+                const forkedRoute = { ...selectedRoute, id: null, title: `${selectedRoute.title} (Copia)`, status: 'project' };
+                setSelectedRoute(forkedRoute);
+                setViewMode('editor');
+            };
+            const handleDeleteRoute = (id) => {
+                setRoutes(prev => prev.filter(r => r.id !== id));
+                setViewMode('none');
+            };
+            const handleExport = () => {
+                const dataStr = JSON.stringify({ walls, routes });
+                const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+                const linkElement = document.createElement('a');
+                linkElement.setAttribute('href', dataUri);
+                linkElement.setAttribute('download', 'spraywall_backup.json');
+                linkElement.click();
+            };
+            const handleImport = (json) => { if(json.walls && json.routes) { setWalls(json.walls); setRoutes(json.routes); } };
+            const handleTabChange = (tab) => { setActiveTab(tab); setViewMode('none'); if (tab === 'home') setActiveWallId(null); };
+
+            return (
+                <div className="app-layout bg-[#0f172a]">
+                    <div className="app-content">
+                        {viewMode === 'editor' && activeWall ? <RouteEditor wall={activeWall} initialData={selectedRoute} onSave={handleSaveRoute} onCancel={() => selectedRoute && selectedRoute.id ? setViewMode('viewer') : setViewMode('none')} /> :
+                        viewMode === 'viewer' && activeWall && selectedRoute ? <RouteViewer wall={activeWall} route={selectedRoute} onBack={() => setViewMode('none')} onEdit={() => setViewMode('editor')} onUpdateStatus={handleUpdateStatus} onFork={handleForkRoute} onDelete={handleDeleteRoute} /> :
+                        activeWallId && activeTab === 'home' ? (
+                            <div className="animate-fade-in bg-[#0f172a]">
+                                <div className="relative h-72 shrink-0">
+                                    <SafeImage src={activeWall.image} className="w-full h-full object-cover" />
+                                    <div className="absolute inset-0 bg-gradient-to-t from-[#0f172a] via-[#0f172a]/40 to-transparent"></div>
+                                    <div className="absolute top-0 left-0 right-0 p-4 pt-6 flex justify-between"><button onClick={() => setActiveWallId(null)} className="bg-black/50 backdrop-blur p-2 rounded-full text-white border border-white/10 hover:bg-black/70 pointer-events-auto active:scale-95"><Icon name="arrowLeft" /></button></div>
+                                    <div className="absolute bottom-0 left-0 right-0 p-6"><h2 className="text-4xl font-display font-bold text-white uppercase italic leading-none mb-2 text-shadow">{activeWall.name}</h2><div className="flex items-center gap-3 text-xs text-slate-300"><span className="bg-blue-600 px-2 py-0.5 rounded font-bold">{wallRoutes.length} RUTAS</span></div></div>
+                                    <button onClick={() => { setSelectedRoute(null); setViewMode('editor'); }} className="absolute -bottom-7 right-6 w-14 h-14 bg-emerald-500 rounded-full flex items-center justify-center text-white shadow-[0_4px_20px_rgba(16,185,129,0.4)] z-10 hover:scale-110 transition-transform border-4 border-[#0f172a] pointer-events-auto"><Icon name="plus" size={28} /></button>
+                                </div>
+                                <div className="p-4 mt-8 space-y-3 pb-32">
+                                    {wallRoutes.length === 0 && <div className="text-center py-10 opacity-50"><Icon name="route" size={40} className="mx-auto mb-2 text-slate-600" /><p className="text-sm">Muro virgen. Crea la primera línea.</p></div>}
+                                    {wallRoutes.map(r => (
+                                        <div key={r.id} onClick={() => { setSelectedRoute(r); setViewMode('viewer'); }} className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 flex justify-between items-center cursor-pointer hover:bg-slate-700/50 transition-colors pointer-events-auto">
+                                            <div className="flex items-center gap-4"><div className="font-display font-bold text-xl text-blue-400 w-10 text-center">{r.grade}</div>
+                                            <div>
+                                                <h3 className="font-bold text-white text-sm flex items-center gap-2">{r.title} {r.status === 'sent' && <Icon name="check" size={12} className="text-green-500" />}</h3>
+                                                <p className="text-[10px] text-slate-500 uppercase">{GRADING_SYSTEMS[r.gradingSystem]?.label}</p></div></div><Icon name="route" size={16} className="text-slate-600" />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                {activeTab === 'home' && <HomeView walls={walls} onSelectWall={(w) => setActiveWallId(w.id)} onUploadWall={handleUploadWall} onExport={handleExport} onImport={handleImport} />}
+                                {activeTab === 'routes' && <RoutesListView routes={routes} onSelectRoute={(r) => { setSelectedRoute(r); setActiveWallId(r.wallId); setViewMode('viewer'); }} />}
+                                {activeTab === 'stats' && <StatsView routes={routes} />}
+                            </>
+                        )}
+                    </div>
+                    {/* NAV CONDICIONAL: Solo se muestra si NO estamos en modo Editor */}
+                    {viewMode !== 'editor' && <BottomNav activeTab={activeTab} onTabChange={handleTabChange} />}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
